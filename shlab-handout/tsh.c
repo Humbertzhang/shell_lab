@@ -177,21 +177,44 @@ void eval(char *cmdline)
         return;
     
     if(!builtin_cmd(argv)){
+        sigset_t mask;
+        sigemptyset(&mask);
+        sigaddset(&mask,SIGCHLD);
+        sigprocmask(SIG_BLOCK,&mask,NULL);
+        
+        /* 避免收到子进程结束返回的影响　*/
+        /*Avoid being influenced by the child process dead */
+
         if((pid=fork())==0){
+            sigprocmask(SIG_UNBLOCK,&mask,NULL);
+            setpgid(0,0);
             if(execve(argv[0],argv,environ)<0){
                 printf("%s :Command not found.\n",argv[0]);
                 exit(0);
             }
         }
-    
-        /* Parent wait for foreground job to terminate */
-        if(!bg){
-            int status;
-            if(waitpid(pid,&status,0)<0)
-                unix_error("waitfg: waitpid error\n");
+        else if(pid<0){
+            unix_error("fork error!\n");
         }
         else{
-            printf("%d %s\n",pid,cmdline);
+            /* Parent wait for foreground job to terminate */
+            if(!bg){
+
+                sigprocmask(SIG_BLOCK, &mask, NULL);
+                addjob(jobs,pid,FG,cmdline);
+                sigprocmask(SIG_UNBLOCK,&mask,NULL);
+
+                if(waitpid(pid,NULL,0)<0)
+                    unix_error("waitfg: waitpid error\n");
+            }
+            else{
+
+                sigprocmask(SIG_BLOCK, &mask, NULL);
+                addjob(jobs,pid,BG,cmdline);
+                sigprocmask(SIG_UNBLOCK,&mask,NULL);
+
+                printf("[%d] (%d) %s",pid2jid(pid)+1,pid,cmdline);
+            }
         }
     }
     return;
@@ -262,6 +285,10 @@ int builtin_cmd(char **argv)
 {
     if(!strcmp(argv[0],"quit")) 
         exit(0);
+    if(!strcmp(argv[0],"jobs")) {
+        listjobs(jobs);
+        return 1;
+    }
     return 0;     /* not a builtin command */
 }
 
@@ -294,6 +321,22 @@ void waitfg(pid_t pid)
  */
 void sigchld_handler(int sig) 
 {
+
+    sigset_t mask_all,prev_all;
+    int olderrno = errno;
+    pid_t pid;
+
+    sigfillset(&mask_all);
+    while((pid = waitpid(-1,NULL,0))>0){
+        /*Stop All the signals */
+        sigprocmask(SIG_BLOCK,&mask_all,&prev_all);
+        deletejob(jobs,pid);
+        sigprocmask(SIG_SETMASK,&prev_all,NULL);
+    }
+    if(errno != ECHILD){
+        unix_error("waitpid error");
+    }
+    errno = olderrno;
     return;
 }
 
