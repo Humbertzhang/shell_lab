@@ -175,15 +175,15 @@ void eval(char *cmdline)
     bg = parseline(buf,argv);
     if(argv[0] == NULL)
         return;
-    
+
+    sigset_t mask;
+    sigemptyset(&mask);
+    sigaddset(&mask,SIGCHLD);
+    sigprocmask(SIG_BLOCK,&mask,NULL);
+    /* 避免收到子进程结束返回的影响　*/
+    /*Avoid being influenced by the child process dead */
+
     if(!builtin_cmd(argv)){
-        sigset_t mask;
-        sigemptyset(&mask);
-        sigaddset(&mask,SIGCHLD);
-        sigprocmask(SIG_BLOCK,&mask,NULL);
-        
-        /* 避免收到子进程结束返回的影响　*/
-        /*Avoid being influenced by the child process dead */
 
         if((pid=fork())==0){
             sigprocmask(SIG_UNBLOCK,&mask,NULL);
@@ -193,29 +193,18 @@ void eval(char *cmdline)
                 exit(0);
             }
         }
-        else if(pid<0){
-            unix_error("fork error!\n");
-        }
-        else{
-            /* Parent wait for foreground job to terminate */
-            if(!bg){
 
-                sigprocmask(SIG_BLOCK, &mask, NULL);
-                addjob(jobs,pid,FG,cmdline);
-                sigprocmask(SIG_UNBLOCK,&mask,NULL);
+        if(!bg)
+            addjob(jobs,pid,FG,cmdline);
+        else
+            addjob(jobs,pid,BG,cmdline);
+        sigprocmask(SIG_UNBLOCK,&mask,NULL);
 
-                if(waitpid(pid,NULL,0)<0)
-                    unix_error("waitfg: waitpid error\n");
-            }
-            else{
+        if(!bg)
+            waitfg(pid);
+        else
+            printf("[%d] (%d) %s",pid2jid(pid)+1,pid,cmdline);
 
-                sigprocmask(SIG_BLOCK, &mask, NULL);
-                addjob(jobs,pid,BG,cmdline);
-                sigprocmask(SIG_UNBLOCK,&mask,NULL);
-
-                printf("[%d] (%d) %s",pid2jid(pid)+1,pid,cmdline);
-            }
-        }
     }
     return;
 }
@@ -305,6 +294,7 @@ void do_bgfg(char **argv)
  */
 void waitfg(pid_t pid)
 {
+    while(pid==fgpid(jobs)){;}
     return;
 }
 
@@ -322,11 +312,11 @@ void waitfg(pid_t pid)
 void sigchld_handler(int sig) 
 {
 
-    sigset_t mask_all,prev_all;
     int olderrno = errno;
+    sigset_t mask_all,prev_all;
     pid_t pid;
-
     sigfillset(&mask_all);
+
     while((pid = waitpid(-1,NULL,0))>0){
         /*Stop All the signals */
         sigprocmask(SIG_BLOCK,&mask_all,&prev_all);
@@ -347,6 +337,17 @@ void sigchld_handler(int sig)
  */
 void sigint_handler(int sig) 
 {
+    int olderrno = errno;
+    pid_t pid;
+    int jid;
+    pid = fgpid(jobs);
+    jid = pid2jid(pid);
+    if(pid != 0) {
+        deletejob(jobs,pid);
+        kill(-pid,sig);
+        printf("Job [%d] (%d) terminated by signal %d\n", jid, pid, sig);
+    }
+    errno = olderrno;
     return;
 }
 
@@ -357,6 +358,12 @@ void sigint_handler(int sig)
  */
 void sigtstp_handler(int sig) 
 {
+    /*
+    int olderrno = errno;
+    sigset_t mask_all,prev_all;
+    pid_t pid;
+    sigfillset(&mask_all);
+    */
     return;
 }
 
