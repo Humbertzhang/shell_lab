@@ -166,27 +166,28 @@ int main(int argc, char **argv)
 */
 void eval(char *cmdline) 
 {
+    //CSAPP 3E Page543
     char *argv[MAXARGS];
     char buf[MAXLINE];
     int bg;
     pid_t pid;
+    sigset_t mask_all,mask_one,prev_one;
 
     strcpy(buf,cmdline);
     bg = parseline(buf,argv);
     if(argv[0] == NULL)
         return;
 
-    sigset_t mask;
-    sigemptyset(&mask);
-    sigaddset(&mask,SIGCHLD);
-    sigprocmask(SIG_BLOCK,&mask,NULL);
-    /* 避免收到子进程结束返回的影响　*/
+    sigfillset(&mask_all);
+    sigemptyset(&mask_one);
+    sigaddset(&mask_one,SIGCHLD);
+    sigprocmask(SIG_BLOCK,&mask_one,&prev_one);
     /*Avoid being influenced by the child process dead */
 
     if(!builtin_cmd(argv)){
 
         if((pid=fork())==0){
-            sigprocmask(SIG_UNBLOCK,&mask,NULL);
+            sigprocmask(SIG_SETMASK,&prev_one,NULL);
             setpgid(0,0);
             if(execve(argv[0],argv,environ)<0){
                 printf("%s :Command not found.\n",argv[0]);
@@ -194,11 +195,12 @@ void eval(char *cmdline)
             }
         }
 
+        sigprocmask(SIG_BLOCK,&mask_all,NULL);
         if(!bg)
             addjob(jobs,pid,FG,cmdline);
         else
             addjob(jobs,pid,BG,cmdline);
-        sigprocmask(SIG_UNBLOCK,&mask,NULL);
+        sigprocmask(SIG_SETMASK,&prev_one,NULL);
 
         if(!bg)
             waitfg(pid);
@@ -308,29 +310,31 @@ void waitfg(pid_t pid)
  *     received a SIGSTOP or SIGTSTP signal. The handler reaps all
  *     available zombie children, but doesn't wait for any other
  *     currently running children to terminate.  
- */
-void sigchld_handler(int sig) 
+ */void sigchld_handler(int sig)
 {
-
-    int olderrno = errno;
-    sigset_t mask_all,prev_all;
     pid_t pid;
-    sigfillset(&mask_all);
+    int status;
 
-    while((pid = waitpid(-1,NULL,0))>0){
-        /*Stop All the signals */
-        sigprocmask(SIG_BLOCK,&mask_all,&prev_all);
-        deletejob(jobs,pid);
-        sigprocmask(SIG_SETMASK,&prev_all,NULL);
+    while((pid = waitpid(-1, &status, WUNTRACED | WNOHANG)) > 0 ){   //Judge the status of the pid's child process
+        if( WIFSTOPPED(status) ) {                                     //Eles if it was stopped by an unattached signal,
+            getjobpid(jobs, pid)->state = ST;
+            int jid = pid2jid(pid);
+            printf("Job [%d] (%d) stopped by signal %d\n", jid, pid, sig);
+
+        }
+        else if( WIFSIGNALED(status) ) {
+            int jid=pid2jid(pid);
+            printf("Job [%d] (%d) terminated by signal %d\n", jid, pid, sig);
+            deletejob(jobs, pid);
+        }
+        else
+            deletejob(jobs, pid);
     }
-    if(errno != ECHILD){
-        unix_error("waitpid error");
-    }
-    errno = olderrno;
     return;
 }
 
-/* 
+
+/*
  * sigint_handler - The kernel sends a SIGINT to the shell whenver the
  *    user types ctrl-c at the keyboard.  Catch it and send it along
  *    to the foreground job.  
@@ -338,14 +342,13 @@ void sigchld_handler(int sig)
 void sigint_handler(int sig) 
 {
     int olderrno = errno;
-    pid_t pid;
-    int jid;
-    pid = fgpid(jobs);
-    jid = pid2jid(pid);
+
+    pid_t pid= fgpid(jobs);
+    //int jid=pid2jid(pid);
     if(pid != 0) {
+        //printf("Job [%d] (%d) terminated by signal %d\n", jid, pid, sig); No need print here as it will print in sigchld_handler
         deletejob(jobs,pid);
         kill(-pid,sig);
-        printf("Job [%d] (%d) terminated by signal %d\n", jid, pid, sig);
     }
     errno = olderrno;
     return;
@@ -358,12 +361,18 @@ void sigint_handler(int sig)
  */
 void sigtstp_handler(int sig) 
 {
-    /*
     int olderrno = errno;
-    sigset_t mask_all,prev_all;
+
     pid_t pid;
-    sigfillset(&mask_all);
-    */
+    pid = fgpid(jobs);
+    //int jid = pid2jid(pid);
+
+    if(pid != 0){
+        //printf("Job [%d] (%d) suspended by signal %d\n",jid,pid,sig); It will print in sigchld_handler
+        getjobpid(jobs,pid)->state = ST;
+        kill(-pid,sig);
+    }
+    errno = olderrno;
     return;
 }
 
