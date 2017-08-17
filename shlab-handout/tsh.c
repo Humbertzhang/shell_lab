@@ -132,7 +132,6 @@ int main(int argc, char **argv)
 
     /* Execute the shell's read/eval loop */
     while (1) {
-    printf("MAIN-------------------------------\n");
 	/* Read command line */
 	if (emit_prompt) {
 	    printf("%s", prompt);
@@ -176,41 +175,41 @@ void eval(char *cmdline)
     pid_t pid;
     sigset_t mask;
 
-    printf("Eval-------------------------\n");
     strcpy(buf,cmdline);
     bg = parseline(buf,argv);
     if(argv[0] == NULL)
         return;
 
-    sigemptyset(&mask);
-    sigaddset(&mask, SIGCHLD);  
-    sigprocmask(SIG_BLOCK, &mask, NULL);
 
     /*Avoid being influenced by the child process dead */
 
     if(!builtin_cmd(argv)){
+        
+        sigemptyset(&mask);
+        sigaddset(&mask, SIGCHLD);  
+        sigprocmask(SIG_BLOCK, &mask, NULL);
 
         if((pid=fork())==0){
             sigprocmask(SIG_UNBLOCK, &mask, NULL);
-            //sigprocmask(SIG_SETMASK,&prev_one,NULL);
             setpgid(0,0);//把子进程放到一个新的进程组里。保证我们的 shell 前台进程组中唯一的进程，当按下 ctrl-c 时，应该捕获 SIGINT 信号并发送给对应的前台进程组中。
             if(execve(argv[0],argv,environ)<0){
                 printf("%s :Command not found.\n",argv[0]);
                 exit(0);
             }
         }
+        else{
+            if(!bg)
+                addjob(jobs,pid,FG,cmdline);
+            else
+                addjob(jobs,pid,BG,cmdline);
+            
+            sigprocmask(SIG_UNBLOCK,&mask,NULL);
 
-        if(!bg)
-            addjob(jobs,pid,FG,cmdline);
-        else
-            addjob(jobs,pid,BG,cmdline);
-        sigprocmask(SIG_UNBLOCK,&mask,NULL);
-
-        if(!bg)
-            waitfg(pid);
-        else
-            printf("[%d] (%d) %s",pid2jid(pid)+1,pid,cmdline);
-        
+            if(!bg)
+                waitfg(pid);
+            else
+                printf("[%d] (%d) %s",pid2jid(pid)+1,pid,cmdline);
+        }
     }
     return;
 }
@@ -278,8 +277,6 @@ int parseline(const char *cmdline, char **argv)
  */
 int builtin_cmd(char **argv) 
 {
-    printf("Argv:%s\n",*argv);
-    printf("BuiltIn-----------------------------------\n");
     if(!strcmp(argv[0],"quit")) 
         exit(0);
     if(!strcmp(argv[0],"jobs")) {
@@ -287,7 +284,6 @@ int builtin_cmd(char **argv)
         return 1;
     }
     if( !strcmp(argv[0],"bg") || !strcmp(argv[0],"fg") ){
-        printf("BGFG-------------------------------------\n");
         do_bgfg(argv);
         return 1;
     }
@@ -307,7 +303,6 @@ void do_bgfg(char **argv)
     int jid;
     pid_t pid;
 
-    printf("DoBgFg-----------------------------------\n");
 
     if(id == NULL){
         printf("%s command requires PID or jobid argument\n",*argv);
@@ -376,7 +371,6 @@ void waitfg(pid_t pid)
     int status;
 
     while((pid = waitpid(-1, &status, WUNTRACED | WNOHANG)) > 0 ){   //Judge the status of the pid's child process
-        printf("Child Handler ------------------------------\n");
         if( WIFSTOPPED(status) ) {                                     //Eles if it was stopped by an unattached signal,
             getjobpid(jobs, pid)->state = ST;
             int jid = pid2jid(pid);
@@ -392,7 +386,6 @@ void waitfg(pid_t pid)
                 deletejob(jobs, pid);
         }
     }
-    printf("ChildHandler Return--------------------------\n");
     errno = olderrno;
     return;
 }
@@ -407,7 +400,6 @@ void sigint_handler(int sig)
 {
     int olderrno = errno;
 
-    printf("SigInt Handler-------------------------\n");
 
     pid_t pid= fgpid(jobs);
     if(pid != 0) {
@@ -427,7 +419,6 @@ void sigtstp_handler(int sig)
 {
     int olderrno = errno;
 
-    printf("Sigstp Handler----------------------------------\n");
 
     pid_t pid = fgpid(jobs);
 
